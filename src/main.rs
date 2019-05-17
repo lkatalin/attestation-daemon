@@ -33,6 +33,7 @@ fn main() {
                                 match quote {
                                     Ok(q) => {
                                         println!("Quote successfully generated.");
+                                        println!("{:?}", q);
                                     },
                                     Err(e) => {
                                         panic!("Error generating quote.");
