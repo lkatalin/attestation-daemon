@@ -1,7 +1,8 @@
 [package]
 name = "attestation-daemon"
 version = "0.1.0"
-authors = ["Lily S <lsturman@redhat.com>"]
+authors = ["LKatalin"]
 edition = "2018"
 
 [dependencies]
+dcap-ql = "0.1.0"
