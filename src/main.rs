@@ -27,6 +27,17 @@ fn main() {
                         match stream.read_exact(&mut encl_report) {
                             Ok(_) => {
                                 let encl_report = sgx_isa::Report::try_copy_from(&encl_report).unwrap();
+
+                                let quote = dcap_ql::quote(&encl_report);
+
+                                match quote {
+                                    Ok(q) => {
+                                        println!("Quote successfully generated.");
+                                    },
+                                    Err(e) => {
+                                        panic!("Error generating quote.");
+                                    },
+                                };
                             },
                             Err(e) => {
                                 panic!("Unable to read report back from enclave.");
