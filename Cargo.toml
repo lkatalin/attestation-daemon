@@ -1,7 +1,15 @@
 [package]
 name = "attestation-daemon"
 version = "0.1.0"
-authors = ["Lily S <lsturman@redhat.com>"]
+authors = ["LKatalin"]
 edition = "2018"
 
 [dependencies]
+failure = "0.1.5"
+openssl = "0.10.23"
+num-traits = "0.2.8"
+hex = "0.3.1"
+signatory-ring = "0.12.0"
+signatory = "0.12.0"
+dcap-ql = { path = "../../rust-sgx/dcap-ql" }
+"sgx-isa" = { version = "0.3.0", path = "../../rust-sgx/sgx-isa" }
