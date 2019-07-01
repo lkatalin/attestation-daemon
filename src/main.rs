@@ -4,6 +4,8 @@ use std::net::{TcpListener, TcpStream};
 use std::io::{self, Read, Write};
 use sgx_isa::{Report, Targetinfo};
 use dcap_ql::quote::*;
+use signatory_ring::ecdsa::p256::*;
+use signatory::ecdsa::PublicKey;
 
 fn main() {
     println!("Daemon listening on port 1034... ");
@@ -35,18 +37,32 @@ fn main() {
                                 match quote {
                                     Ok(q) => {
                                         println!("Quote successfully generated.");
-                                        //println!("{:?}", q);
+                                        // println!("{:X?}", q);
 
-                                        // test attempt to parse quote
+                                        // get parsable quote
                                         let quote = dcap_ql::quote::Quote::parse(&q).unwrap();
+
+                                        // extract quote signature data struct
                                         let sig = quote
                                             .signature::<dcap_ql::quote::Quote3SignatureEcdsaP256>()
                                             .unwrap();
 
-                                        
-                                        let encl_rep_sig = sig.signature();
+                                        // extract quote header
+                                        let quote_header = quote
+                                            .header();
 
-                                        let att_pub_key = sig.attestation_public_key();
+                                        // some parsing of quote sig data struct
+                                        let encl_report_body = quote.report_body();
+                                        let encl_report_sig = sig.signature();
+                                        let qe_report = sig.qe3_report();
+                                        let qe_report_sig = sig.qe3_signature();
+                                        let att_key = sig.attestation_public_key();
+
+                                        //let att_pub_key = sig.attestation_public_key();
+                                        //let att_pk = signatory::ecdsa::PublicKey::from_bytes(att_pub_key).unwrap();
+
+                                        //let verifier = Verifier::from(att_pk);
+                                        //assert!(verifier.verify(rep_body, &encl_rep_sig).is_ok());
 
                                         let certdata = sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
 

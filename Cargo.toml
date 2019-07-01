@@ -5,6 +5,7 @@ authors = ["LKatalin"]
 edition = "2018"
 
 [dependencies]
+signatory-ring = "0.12.0"
 signatory = "0.12.0"
 dcap-ql = { path = "../../rust-sgx/dcap-ql" }
 "sgx-isa" = { version = "0.3.0", path = "../../rust-sgx/sgx-isa" }
