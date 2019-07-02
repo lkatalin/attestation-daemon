@@ -44,7 +44,7 @@ fn main() {
 
                                         // extract quote signature data struct
                                         let sig = quote
-                                            .signature::<dcap_ql::quote::Quote3SignatureEcdsaP256>()
+                                            .signature::<Quote3SignatureEcdsaP256>()
                                             .unwrap();
 
                                         // extract quote header
@@ -57,34 +57,22 @@ fn main() {
                                         let qe_report = sig.qe3_report();
                                         let qe_report_sig = sig.qe3_signature();
                                         let att_key = sig.attestation_public_key();
-
-                                        //let att_pub_key = sig.attestation_public_key();
-                                        //let att_pk = signatory::ecdsa::PublicKey::from_bytes(att_pub_key).unwrap();
-
-                                        //let verifier = Verifier::from(att_pk);
-                                        //assert!(verifier.verify(rep_body, &encl_rep_sig).is_ok());
-
                                         let certdata = sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
 
-                                        println!("Cert Data: {:?}", certdata);
-
-                                        //let sig = quote.signature::<Quote3SignatureEcdsaP256>().unwrap();
-
-
-                                        //println!("{:?}", sig);
+                                        // debugging print statements
+                                        //println!("encl rep body: {:X?}\n", encl_report_body);
+                                        //println!("encl rep sig: {:X?}\n", encl_report_sig);
+                                        //println!("qe rep: {:X?}\n", qe_report);
+                                        //println!("qe rep sig: {:X?}\n", qe_report_sig);
+                                        //println!("att key: {:X?}\n", att_key);
                                         
-                                        // send quote back to client
-                                        //match stream_client.write(&q.as_ref()) {
-                                        //    Ok(_) => (),
-                                        //    Err(e) => panic!("Error sending quote back to client: {}", e),
-                                        //};
                                     },
-                                    Err(e) => {
+                                    Err(_e) => {
                                         panic!("Error generating quote.");
                                     },
                                 };
                             },
-                            Err(e) => {
+                            Err(_e) => {
                                 panic!("Unable to read report back from enclave.");
                             },
                         };
