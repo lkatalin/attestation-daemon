@@ -4,8 +4,12 @@ use std::net::{TcpListener, TcpStream};
 use std::io::{self, Read, Write};
 use sgx_isa::{Report, Targetinfo};
 use dcap_ql::quote::*;
-use signatory_ring::ecdsa::p256::*;
-use signatory::ecdsa::PublicKey;
+use openssl::x509::*;
+//use openssl::sign::Verifier;
+use openssl::x509::store::X509StoreBuilder;
+use openssl::stack::Stack;
+//use signatory_ring::ecdsa::p256::*;
+//use signatory::ecdsa::PublicKey;
 
 fn main() {
     println!("Daemon listening on port 1034... ");
@@ -48,24 +52,74 @@ fn main() {
                                             .unwrap();
 
                                         // extract quote header
-                                        let quote_header = quote
+                                        let _quote_header = quote
                                             .header();
 
                                         // some parsing of quote sig data struct
-                                        let encl_report_body = quote.report_body();
-                                        let encl_report_sig = sig.signature();
-                                        let qe_report = sig.qe3_report();
-                                        let qe_report_sig = sig.qe3_signature();
-                                        let att_key = sig.attestation_public_key();
-                                        let certdata = sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
-
-                                        // debugging print statements
-                                        //println!("encl rep body: {:X?}\n", encl_report_body);
-                                        //println!("encl rep sig: {:X?}\n", encl_report_sig);
-                                        //println!("qe rep: {:X?}\n", qe_report);
-                                        //println!("qe rep sig: {:X?}\n", qe_report_sig);
-                                        //println!("att key: {:X?}\n", att_key);
+                                        let _encl_report_body = quote.report_body();
+                                        let _encl_report_sig = sig.signature();
+                                        let _qe_report = sig.qe3_report();
+                                        let _qe_report_sig = sig.qe3_signature();
+                                        let _att_key = sig.attestation_public_key();
+                                        let _certdata = sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
+ 
+                                        // to do: let user choose root cert
                                         
+                                        // load hardcoded external pck_cert file
+                                        let pck_cert = include_bytes!("../pck_cert.pem");
+                                        let pck_cert = X509::from_pem(pck_cert).ok().expect("Failed to load PCK cert");
+
+                                        // load intermed cert
+                                        let intermed_cert = include_bytes!("../pck_intermed_cert.pem");
+                                        let intermed_cert = X509::from_pem(intermed_cert).ok().expect("Failed to load intermed cert");
+
+                                        // load root cert
+                                        let root_cert = include_bytes!("../pck_root_cert.pem");
+                                        let root_cert = X509::from_pem(root_cert).ok().expect("Failed to load root cert");
+
+                                        // check issued relationships
+                                        let intermed_issued_pck = intermed_cert.issued(&pck_cert);
+                                        let root_issued_intermed = root_cert.issued(&intermed_cert);
+                                        println!("Intermed cert issued PCK: {}", intermed_issued_pck);
+                                        println!("Root cert issued intermed: {}", root_issued_intermed);
+
+                                        // check signatures
+                                        let pck_pub_key = pck_cert.public_key();
+                                        
+                                        // create cert chain
+                                        let mut chain = Stack::new().unwrap();
+
+                                        // add root to trusted store
+                                        let mut store_bldr = X509StoreBuilder::new().unwrap();
+                                        store_bldr.add_cert(root_cert).unwrap();
+                                        let store = store_bldr.build();
+
+                                        // create context to verify cert
+                                        let mut context = X509StoreContext::new().unwrap();
+                                        assert!(context
+                                            .init(&store, &intermed_cert, &chain, |c| c.verify_cert())
+                                            .unwrap());
+                                        assert!(context
+                                            .init(&store, &intermed_cert, &chain, |c| c.verify_cert())
+                                            .unwrap());
+
+                                        // check that untrue verification fails
+                                        assert!(!context
+                                                .init(&store, &pck_cert, &chain, |c| c.verify_cert())
+                                                .unwrap());
+
+                                        // add intermed to context chain
+                                        chain.push(intermed_cert);
+
+
+                                        // check pck cert verification now
+                                        assert!(context
+                                                .init(&store, &pck_cert, &chain, |c| c.verify_cert())
+                                                .unwrap());
+                                    
+                                    
+                                        println!("PCK cert chain verified");
+
                                     },
                                     Err(_e) => {
                                         panic!("Error generating quote.");
