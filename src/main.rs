@@ -17,6 +17,7 @@ use openssl::bn::BigNumContext;
 use openssl::bn::BigNumContextRef;
 use std::ops::DerefMut;
 use openssl::ec::EcGroup;
+use openssl::hash::MessageDigest;
 
 fn main() {
     println!("Daemon listening on port 1034... ");
@@ -128,10 +129,19 @@ fn main() {
                                         println!("PCK cert chain verified");
 
                                         //let pck_pub = EcKey::from_curve_name(Nid::SECP256K1).unwrap();
+                                        
+                                        // parameters for AK
                                         let ecgroup = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
                                         let mut empty_context = BigNumContext::new().unwrap();
                                         let mut empty_context = empty_context.deref_mut(); 
-                                        let att_key = EcPoint::from_bytes(&ecgroup, _att_key, empty_context);
+
+                                        // AK transform EcPoint --> EcKey --> PKey --> Verifier
+                                        let att_key = EcPoint::from_bytes(&ecgroup, _att_key, empty_context).unwrap();
+                                        let att_key = EcKey::from_public_key(&ecgroup, &att_key).unwrap();
+                                        let att_key = PKey::from_ec_key(att_key).unwrap();
+                                        
+                                        let msgdgst = MessageDigest::from_nid(Nid::X9_62_PRIME256V1).unwrap();
+                                        let att_key_verifier = Verifier::new(msgdgst, &att_key);
 
 
                                     },
