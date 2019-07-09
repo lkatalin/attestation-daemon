@@ -1,15 +1,22 @@
 extern crate dcap_ql;
 
 use std::net::{TcpListener, TcpStream};
-use std::io::{self, Read, Write};
-use sgx_isa::{Report, Targetinfo};
+use std::io::{Read, Write};
+//use sgx_isa::{Report, Targetinfo};
 use dcap_ql::quote::*;
 use openssl::x509::*;
-//use openssl::sign::Verifier;
 use openssl::x509::store::X509StoreBuilder;
 use openssl::stack::Stack;
-//use signatory_ring::ecdsa::p256::*;
-//use signatory::ecdsa::PublicKey;
+use openssl::ecdsa::EcdsaSig;
+use openssl::ec::EcKey;
+use openssl::nid::Nid;
+use openssl::pkey::PKey;
+use openssl::sign::Verifier;
+use openssl::ec::EcPoint;
+use openssl::bn::BigNumContext;
+use openssl::bn::BigNumContextRef;
+use std::ops::DerefMut;
+use openssl::ec::EcGroup;
 
 fn main() {
     println!("Daemon listening on port 1034... ");
@@ -59,7 +66,7 @@ fn main() {
                                         let _encl_report_body = quote.report_body();
                                         let _encl_report_sig = sig.signature();
                                         let _qe_report = sig.qe3_report();
-                                        let _qe_report_sig = sig.qe3_signature();
+                                        let qe_report_sig = sig.qe3_signature();
                                         let _att_key = sig.attestation_public_key();
                                         let _certdata = sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
  
@@ -83,8 +90,8 @@ fn main() {
                                         println!("Intermed cert issued PCK: {}", intermed_issued_pck);
                                         println!("Root cert issued intermed: {}", root_issued_intermed);
 
-                                        // check signatures
-                                        let pck_pub_key = pck_cert.public_key();
+                                        // check signature on 
+                                        let _pck_pub_key = pck_cert.public_key();
                                         
                                         // create cert chain
                                         let mut chain = Stack::new().unwrap();
@@ -109,7 +116,7 @@ fn main() {
                                                 .unwrap());
 
                                         // add intermed to context chain
-                                        chain.push(intermed_cert);
+                                        let _ = chain.push(intermed_cert);
 
 
                                         // check pck cert verification now
@@ -119,6 +126,13 @@ fn main() {
                                     
                                     
                                         println!("PCK cert chain verified");
+
+                                        //let pck_pub = EcKey::from_curve_name(Nid::SECP256K1).unwrap();
+                                        let ecgroup = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+                                        let mut empty_context = BigNumContext::new().unwrap();
+                                        let mut empty_context = empty_context.deref_mut(); 
+                                        let att_key = EcPoint::from_bytes(&ecgroup, _att_key, empty_context);
+
 
                                     },
                                     Err(_e) => {
