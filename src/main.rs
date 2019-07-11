@@ -4,6 +4,9 @@ use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
 use sgx_isa::{Report};
 use dcap_ql::quote::*;
+use std::borrow::Cow;
+use std::env;
+use std::fs;
 //use openssl::x509::*;
 //use openssl::x509::store::X509StoreBuilder;
 //use openssl::stack::Stack;
@@ -60,6 +63,20 @@ fn generate_quote(report: &sgx_isa::Report) -> std::vec::Vec<u8> {
     quote
 }
 
+fn return_quote_sig<'a>(quote: &'a dcap_ql::quote::Quote<'a>) ->
+        dcap_ql::quote::Quote3SignatureEcdsaP256<'a> {
+    quote.signature::<Quote3SignatureEcdsaP256>().unwrap()
+}
+
+fn load_cert(file_path: &str) -> openssl::x509::X509 {
+    let cert = fs::read_to_string(file_path)
+        .expect("Failed to load file");
+    
+    openssl::x509::X509::from_pem(cert.as_bytes()).ok()
+        .expect("Failed to load cert")
+}
+
+
 fn main() -> std::result::Result<(), std::io::Error> {
     println!("Daemon listening for client request on port 1034... ");
 
@@ -77,32 +94,30 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 // get a quote from QE for the enclave's report
                 let quote = generate_quote(&report);
 
+                // get parseable quote
+                let quote = dcap_ql::quote::Quote::parse(&quote).unwrap();
 
-//                                        // get parsable quote
-//                                        let quote = dcap_ql::quote::Quote::parse(&quote).unwrap();
-//
-//                                        // extract quote signature data struct
-//                                        let sig = quote
-//                                            .signature::<Quote3SignatureEcdsaP256>()
-//                                            .unwrap();
-//
-//                                        // extract quote header
-//                                        let quote_header = quote
-//                                            .header();
-//
-//                                        // some parsing of quote sig data struct
-//                                        let encl_report_body = quote.report_body();
-//                                        let encl_report_sig = sig.signature();
-//                                        let _qe_report = sig.qe3_report();
-//                                        let qe_report_sig = sig.qe3_signature();
-//                                        let _att_key = sig.attestation_public_key();
-//                                        let _certdata = sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
-// 
-//                                        // to do: let user choose root cert
-//                                        
-//                                        // load hardcoded external pck_cert file
-//                                        let pck_cert = include_bytes!("../pck_cert.pem");
-//                                        let pck_cert = X509::from_pem(pck_cert).ok().expect("Failed to load PCK cert");
+                // parse main quote
+                let q_header = quote.header();
+                let q_report_body = quote.report_body();
+                let q_sig = return_quote_sig(&quote);
+
+                // parse quote header
+                // TODO
+
+                // parse quote report body
+                // TODO
+
+                // parse quote sig
+                let q_enclave_report_sig = q_sig.signature();
+                let q_qe_report = q_sig.qe3_report();
+                let q_qe_report_sig = q_sig.qe3_signature();
+                let q_att_key_pub = q_sig.attestation_public_key();
+                let q_cert_data = q_sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
+
+                // TODO: let user choose root cert
+
+                let pck_cert = load_cert("../pck_cert.pem");
 //
 //                                        // load intermed cert
 //                                        let intermed_cert = include_bytes!("../pck_intermed_cert.pem");
