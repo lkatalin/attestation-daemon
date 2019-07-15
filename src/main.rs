@@ -19,7 +19,8 @@ use openssl::bn::BigNumContext;
 use std::ops::DerefMut;
 use openssl::ec::EcGroup;
 use openssl::hash::MessageDigest;
-
+use byteorder::{ByteOrder, BigEndian, ReadBytesExt};
+use num_traits::cast::ToPrimitive;
 
 fn handle_client_init(stream_client: TcpStream) {
     println!("New connection for daemon: {}", stream_client.peer_addr().unwrap());
@@ -130,25 +131,27 @@ fn verify_chain_sigs(root_cert: openssl::x509::X509,
 //
 // }
 
-fn verify_AK_to_quote(ak: &[u8], report_body: &[u8], report_sig: &[u8]) {
+fn verify_AK_to_quote(ak: &[u8], quote_header: &dcap_ql::quote::QuoteHeader, 
+                      report_body: &[u8], ak_sig: &[u8]) {
 
     // set curve and context
     let ecgroup = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
     let mut empty_context = BigNumContext::new().unwrap();
     let empty_context = empty_context.deref_mut(); 
 
-    // AK transform EcPoint --> EcKey --> PKey --> Verifier
+    // import AK as EcPoint --> EcKey --> PKey
     let att_key = EcPoint::from_bytes(&ecgroup, ak, empty_context).unwrap();
     let att_key = EcKey::from_public_key(&ecgroup, &att_key).unwrap();
     let att_key = PKey::from_ec_key(att_key).unwrap();
                                         
+    // AK as PKey --> Verifier
     let msgdgst = MessageDigest::from_nid(Nid::X9_62_PRIME256V1).unwrap();
     let mut att_key_verifier = Verifier::new(msgdgst, &att_key).unwrap();
 
-    // test verifer
-    //att_key_verifier.update(&quote_header[..]).unwrap();
-    //att_key_verifier.update(encl_report_body).unwrap();
-    //assert!(att_key_verifier.verify(&encl_report_sig[..]).unwrap());
+    // verify signature of AK on quote_header + report_body
+    //att_key_verifier.update(quote_header[..]).unwrap();
+    //att_key_verifier.update(report_body).unwrap();
+    //assert!(att_key_verifier.verify(&ak_sig).unwrap());
 }
 
                 
@@ -179,6 +182,28 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
                 // parse quote header
                 // TODO
+                match q_header {
+                    dcap_ql::quote::QuoteHeader::V3 {
+                        attestation_key_type,
+                        qe3_svn,
+                        pce_svn,
+                        qe3_vendor_id,
+                        user_data,
+                    } => {
+                        println!("ok");
+                        let mut vec = Vec::new();
+                        vec.push(3 as u16); // should be two bytes for "version"
+                        vec.push(attestation_key_type.to_u16().unwrap());
+                        vec.push(qe3_svn.clone());
+                        vec.push(pce_svn.clone());
+                        let qe_vid = (**qe3_vendor_id).to_owned();
+                        //let qe_vid_u16 = BigEndian::read_u16(&qe_vid);
+                        let qe_vid_u16 = qe_vid.read_u16::<BigEndian>();
+                        println!("{:?}", qe_vid);
+                        //vec.extend(&qe_vid_u16[..]);
+                        //vec.extend(*user_data);
+                    }
+                }
 
                 // parse quote report body
                 // TODO
@@ -204,7 +229,7 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 println!("PCK cert chain verified");
 
                 // verify AK's signature on Quote
-                // verify_AK_to_quote();
+                verify_AK_to_quote(&q_att_key_pub, &q_header, &q_report_body, &q_enclave_report_sig);
                 
                 // verify PCK's signature on AKpub
                 // verify_PCK_to_AK();
