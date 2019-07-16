@@ -1,6 +1,6 @@
 extern crate dcap_ql;
 
-use bytevec;
+//use bytevec;
 use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
 use sgx_isa::{Report};
@@ -20,11 +20,11 @@ use openssl::bn::BigNumContext;
 use std::ops::DerefMut;
 use openssl::ec::EcGroup;
 use openssl::hash::MessageDigest;
-use byteorder::{ByteOrder, BigEndian, ReadBytesExt};
-use num_traits::cast::ToPrimitive;
-use read_byte_slice::{ByteSliceIter, FallibleStreamingIterator};
-use std::io::Cursor;
-use convert_base::Convert;
+//use byteorder::{ByteOrder, BigEndian, ReadBytesExt};
+//use num_traits::cast::ToPrimitive;
+//use read_byte_slice::{ByteSliceIter, FallibleStreamingIterator};
+//use std::io::Cursor;
+//use convert_base::Convert;
 
 
 fn handle_client_init(stream_client: TcpStream) {
@@ -171,6 +171,31 @@ fn cast_u8vec_to_u16vec(vec : Vec<u8>) -> Vec<u16> {
     u16vec
 }
 
+fn qheader_to_bytevec(header: dcap_ql::quote::QuoteHeader) -> Vec<u16> {
+    let mut vec = Vec::new();
+    match header {
+        dcap_ql::quote::QuoteHeader::V3 {
+            attestation_key_type,
+            qe3_svn,
+            pce_svn,
+            qe3_vendor_id,
+            user_data,
+        } => {
+            vec.push(3 as u16); // should be two bytes for "version"
+            vec.push(attestation_key_type as u16);
+            vec.push(qe3_svn.clone());
+            vec.push(pce_svn.clone());
+            println!("qe3vid: {:x?}", qe3_vendor_id);
+            //let mut qe_vid = (**qe3_vendor_id).to_owned();
+            //let qe_id_u16 = cast_u8vec_to_u16vec(qe_vid);
+            //vec.extend(qe_id_u16);
+            //let mut user_data = (**user_data).to_owned();
+            //let user_data_u16 = cast_u8vec_to_u16vec(user_data);
+            //vec.extend(user_data_u16);
+        }
+    }
+    vec
+}
                 
 fn main() -> std::result::Result<(), std::io::Error> {
     println!("Daemon listening for client request on port 1034... ");
@@ -199,29 +224,8 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
                 // parse quote header
                 // TODO
-                match q_header {
-                    dcap_ql::quote::QuoteHeader::V3 {
-                        attestation_key_type,
-                        qe3_svn,
-                        pce_svn,
-                        qe3_vendor_id,
-                        user_data,
-                    } => {
-                        let mut vec = Vec::new();
-                        vec.push(3 as u16); // should be two bytes for "version"
-                        vec.push(attestation_key_type.to_u16().unwrap());
-                        vec.push(qe3_svn.clone());
-                        vec.push(pce_svn.clone());
-                        let mut qe_vid = (**qe3_vendor_id).to_owned();
-                        let qe_id_u16 = cast_u8vec_to_u16vec(qe_vid);
-                        vec.extend(qe_id_u16);
-                        let mut user_data = (**user_data).to_owned();
-                        let user_data_u16 = cast_u8vec_to_u16vec(user_data);
-                        vec.extend(user_data_u16);
-
-                        println!("This is our byte vector of the quote header: {:x?}", vec);
-                    }
-                }
+                let qvec = qheader_to_bytevec(**q_header.to_owned());
+                println!("qvec is: {:x?}", qvec);
 
                 // parse quote report body
                 // TODO
