@@ -21,6 +21,7 @@ use openssl::ec::EcGroup;
 use openssl::hash::MessageDigest;
 use byteorder::{ByteOrder, BigEndian, ReadBytesExt};
 use num_traits::cast::ToPrimitive;
+use read_byte_slice::{ByteSliceIter, FallibleStreamingIterator};
 
 fn handle_client_init(stream_client: TcpStream) {
     println!("New connection for daemon: {}", stream_client.peer_addr().unwrap());
@@ -196,10 +197,21 @@ fn main() -> std::result::Result<(), std::io::Error> {
                         vec.push(attestation_key_type.to_u16().unwrap());
                         vec.push(qe3_svn.clone());
                         vec.push(pce_svn.clone());
-                        let qe_vid = (**qe3_vendor_id).to_owned();
-                        //let qe_vid_u16 = BigEndian::read_u16(&qe_vid);
-                        let qe_vid_u16 = qe_vid.read_u16::<BigEndian>();
-                        println!("{:?}", qe_vid);
+                        let mut qe_vid = (**qe3_vendor_id).to_owned();
+                        let mut qe_vid = &qe_vid[..];
+                        
+                        let mut qe_vid_u16 : Vec<u16> = Vec::new();
+
+                        let mut iter = ByteSliceIter::new(qe_vid, 2);
+                        while let Some(chunk) = iter.next()? {
+                            //println!("{:?}", chunk);
+                            qe_vid_u16.push(chunk);
+                        }
+
+                        //let qe_vid_u16 = qe_vid.read_u16::<BigEndian>().unwrap();
+                        
+                        println!("{:?}", qe_vid_u16);
+                        
                         //vec.extend(&qe_vid_u16[..]);
                         //vec.extend(*user_data);
                     }
