@@ -1,5 +1,6 @@
 extern crate dcap_ql;
 
+use bytevec;
 use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
 use sgx_isa::{Report};
@@ -22,6 +23,9 @@ use openssl::hash::MessageDigest;
 use byteorder::{ByteOrder, BigEndian, ReadBytesExt};
 use num_traits::cast::ToPrimitive;
 use read_byte_slice::{ByteSliceIter, FallibleStreamingIterator};
+use std::io::Cursor;
+use convert_base::Convert;
+
 
 fn handle_client_init(stream_client: TcpStream) {
     println!("New connection for daemon: {}", stream_client.peer_addr().unwrap());
@@ -155,6 +159,18 @@ fn verify_AK_to_quote(ak: &[u8], quote_header: &dcap_ql::quote::QuoteHeader,
     //assert!(att_key_verifier.verify(&ak_sig).unwrap());
 }
 
+fn cast_u8_to_u16(num : u8 ) -> u16 { 
+    num as u16
+}
+
+fn cast_u8vec_to_u16vec(vec : Vec<u8>) -> Vec<u16> {
+    let mut u16vec = Vec::new();
+    for num in vec {
+        u16vec.push(cast_u8_to_u16(num));
+    }
+    u16vec
+}
+
                 
 fn main() -> std::result::Result<(), std::io::Error> {
     println!("Daemon listening for client request on port 1034... ");
@@ -191,29 +207,19 @@ fn main() -> std::result::Result<(), std::io::Error> {
                         qe3_vendor_id,
                         user_data,
                     } => {
-                        println!("ok");
                         let mut vec = Vec::new();
                         vec.push(3 as u16); // should be two bytes for "version"
                         vec.push(attestation_key_type.to_u16().unwrap());
                         vec.push(qe3_svn.clone());
                         vec.push(pce_svn.clone());
                         let mut qe_vid = (**qe3_vendor_id).to_owned();
-                        let mut qe_vid = &qe_vid[..];
-                        
-                        let mut qe_vid_u16 : Vec<u16> = Vec::new();
+                        let qe_id_u16 = cast_u8vec_to_u16vec(qe_vid);
+                        vec.extend(qe_id_u16);
+                        let mut user_data = (**user_data).to_owned();
+                        let user_data_u16 = cast_u8vec_to_u16vec(user_data);
+                        vec.extend(user_data_u16);
 
-                        let mut iter = ByteSliceIter::new(qe_vid, 2);
-                        while let Some(chunk) = iter.next()? {
-                            //println!("{:?}", chunk);
-                            qe_vid_u16.push(chunk);
-                        }
-
-                        //let qe_vid_u16 = qe_vid.read_u16::<BigEndian>().unwrap();
-                        
-                        println!("{:?}", qe_vid_u16);
-                        
-                        //vec.extend(&qe_vid_u16[..]);
-                        //vec.extend(*user_data);
+                        println!("This is our byte vector of the quote header: {:x?}", vec);
                     }
                 }
 
