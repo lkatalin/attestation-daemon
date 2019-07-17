@@ -21,7 +21,7 @@ use std::ops::DerefMut;
 use openssl::ec::EcGroup;
 use openssl::hash::MessageDigest;
 //use byteorder::{ByteOrder, BigEndian, ReadBytesExt};
-//use num_traits::cast::ToPrimitive;
+use num_traits::cast::ToPrimitive;
 //use read_byte_slice::{ByteSliceIter, FallibleStreamingIterator};
 //use std::io::Cursor;
 //use convert_base::Convert;
@@ -136,8 +136,7 @@ fn verify_chain_sigs(root_cert: openssl::x509::X509,
 //
 // }
 
-fn verify_AK_to_quote(ak: &[u8], quote_header: &dcap_ql::quote::QuoteHeader, 
-                      report_body: &[u8], ak_sig: &[u8]) {
+fn verify_AK_to_quote(ak: &[u8], signed: &[u16], ak_sig: &[u8]) {
 
     // set curve and context
     let ecgroup = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
@@ -154,9 +153,8 @@ fn verify_AK_to_quote(ak: &[u8], quote_header: &dcap_ql::quote::QuoteHeader,
     let mut att_key_verifier = Verifier::new(msgdgst, &att_key).unwrap();
 
     // verify signature of AK on quote_header + report_body
-    //att_key_verifier.update(quote_header[..]).unwrap();
-    //att_key_verifier.update(report_body).unwrap();
-    //assert!(att_key_verifier.verify(&ak_sig).unwrap());
+    att_key_verifier.update(signed).unwrap();
+    assert!(att_key_verifier.verify(&ak_sig).unwrap());
 }
 
 fn cast_u8_to_u16(num : u8 ) -> u16 { 
@@ -171,7 +169,7 @@ fn cast_u8vec_to_u16vec(vec : Vec<u8>) -> Vec<u16> {
     u16vec
 }
 
-fn qheader_to_bytevec(header: dcap_ql::quote::QuoteHeader) -> Vec<u16> {
+fn qheader_to_bytevec(header: &dcap_ql::quote::QuoteHeader) -> Vec<u16> {
     let mut vec = Vec::new();
     match header {
         dcap_ql::quote::QuoteHeader::V3 {
@@ -181,17 +179,19 @@ fn qheader_to_bytevec(header: dcap_ql::quote::QuoteHeader) -> Vec<u16> {
             qe3_vendor_id,
             user_data,
         } => {
-            vec.push(3 as u16); // should be two bytes for "version"
-            vec.push(attestation_key_type as u16);
-            vec.push(qe3_svn.clone());
-            vec.push(pce_svn.clone());
-            println!("qe3vid: {:x?}", qe3_vendor_id);
-            //let mut qe_vid = (**qe3_vendor_id).to_owned();
-            //let qe_id_u16 = cast_u8vec_to_u16vec(qe_vid);
-            //vec.extend(qe_id_u16);
-            //let mut user_data = (**user_data).to_owned();
-            //let user_data_u16 = cast_u8vec_to_u16vec(user_data);
-            //vec.extend(user_data_u16);
+            vec.push(3 as u16);                                  // version == 2 bytes
+            vec.push(attestation_key_type.to_u16().unwrap());    // AK key type == 2 bytes
+            vec.push(0 as u16);                                  // reserved == 4 bytes
+            vec.push(qe3_svn.clone());                           // QE SVN == 2 bytes
+            vec.push(pce_svn.clone());                           // PCE SVN == 2 bytes
+            
+            let mut qe_vid = (**qe3_vendor_id).to_owned();       // QE vendor ID == 16 bytes
+            let qe_id_u16 = cast_u8vec_to_u16vec(qe_vid);
+            vec.extend(qe_id_u16);
+            
+            let mut user_data = (**user_data).to_owned();        // user data == 20 bytes
+            let user_data_u16 = cast_u8vec_to_u16vec(user_data); // (first 16 bytes are QE identifier)
+            vec.extend(user_data_u16);
         }
     }
     vec
@@ -224,8 +224,6 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
                 // parse quote header
                 // TODO
-                let qvec = qheader_to_bytevec(**q_header.to_owned());
-                println!("qvec is: {:x?}", qvec);
 
                 // parse quote report body
                 // TODO
@@ -251,7 +249,9 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 println!("PCK cert chain verified");
 
                 // verify AK's signature on Quote
-                verify_AK_to_quote(&q_att_key_pub, &q_header, &q_report_body, &q_enclave_report_sig);
+                let qvec = qheader_to_bytevec(q_header);
+                let signed_by_ak = qvec.extend(q_report_body);
+                verify_AK_to_quote(&q_att_key_pub, &signed_by_ak, &q_enclave_report_sig);
                 
                 // verify PCK's signature on AKpub
                 // verify_PCK_to_AK();
