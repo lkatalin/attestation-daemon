@@ -1,13 +1,13 @@
+#![allow(dead_code)]
+
 extern crate dcap_ql;
 
-//use bytevec;
 use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
 use sgx_isa::{Report};
 use dcap_ql::quote::*;
-//use std::borrow::Cow;
-//use std::env;
 use std::fs;
+use std::str;
 use openssl::x509::*;
 use openssl::x509::store::X509StoreBuilder;
 use openssl::stack::Stack;
@@ -15,16 +15,10 @@ use openssl::ec::EcKey;
 use openssl::nid::Nid;
 use openssl::pkey::PKey;
 use openssl::sign::Verifier;
-use openssl::ec::EcPoint;
-use openssl::bn::BigNumContext;
-use std::ops::DerefMut;
 use openssl::ec::EcGroup;
 use openssl::hash::MessageDigest;
-//use byteorder::{ByteOrder, BigEndian, ReadBytesExt};
+use openssl::sign::*;
 use num_traits::cast::ToPrimitive;
-//use read_byte_slice::{ByteSliceIter, FallibleStreamingIterator};
-//use std::io::Cursor;
-//use convert_base::Convert;
 
 
 fn handle_client_init(stream_client: TcpStream) {
@@ -33,7 +27,7 @@ fn handle_client_init(stream_client: TcpStream) {
 
 
 fn connect_to_enclave() -> Result<TcpStream> {
-    let mut enclave_cnx = TcpStream::connect("localhost:1032")
+    let enclave_cnx = TcpStream::connect("localhost:1032")
         .expect("Could not connect to enclave on 1032");
 
     Ok(enclave_cnx)
@@ -136,29 +130,72 @@ fn verify_chain_sigs(root_cert: openssl::x509::X509,
 //
 // }
 
-fn verify_AK_to_quote(ak: &[u8], signed: &[u16], ak_sig: &[u8]) {
 
-    // set curve and context
-    let ecgroup = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
-    let mut empty_context = BigNumContext::new().unwrap();
-    let empty_context = empty_context.deref_mut(); 
+fn key_from_affine_coordinates(x : Vec<u8>, y : Vec<u8>) -> 
+    openssl::ec::EcKey<openssl::pkey::Public> {
+    
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let xbn = openssl::bn::BigNum::from_slice(&x).unwrap();
+        let ybn = openssl::bn::BigNum::from_slice(&y).unwrap();
 
-    // import AK as EcPoint --> EcKey --> PKey
-    let att_key = EcPoint::from_bytes(&ecgroup, ak, empty_context).unwrap();
-    let att_key = EcKey::from_public_key(&ecgroup, &att_key).unwrap();
-    let att_key = PKey::from_ec_key(att_key).unwrap();
-                                        
-    // AK as PKey --> Verifier
-    let msgdgst = MessageDigest::from_nid(Nid::X9_62_PRIME256V1).unwrap();
-    let mut att_key_verifier = Verifier::new(msgdgst, &att_key).unwrap();
+        let ec_key = EcKey::from_public_key_affine_coordinates(
+            &group, &xbn, &ybn
+            ).unwrap();
+        
+        assert!(ec_key.check_key().is_ok());
 
-    // verify signature of AK on quote_header + report_body
-    att_key_verifier.update(signed).unwrap();
-    assert!(att_key_verifier.verify(&ak_sig).unwrap());
+        ec_key
 }
+
+fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: &[u8]) -> 
+    std::result::Result<(), failure::Error> {
+
+        let xcoord = ak[0..32].to_owned();
+        let ycoord = ak[32..64].to_owned();
+
+        let ec_key = key_from_affine_coordinates(xcoord, ycoord);
+        let pkey = PKey::from_ec_key(ec_key).unwrap();
+        
+        let mut verifier = Verifier::new(MessageDigest::sha256(), &pkey).unwrap();
+        verifier.update(signed).unwrap();
+        assert!(verifier.verify(&ak_sig).unwrap());
+
+
+        //let msgdgst = MessageDigest::from_nid(Nid::X9_62_PRIME256V1).unwrap();
+        //let q = Nid::X9_62_PRIME256V1;
+        //let fsk = MessageDigest::from_nid(q).unwrap();
+        //let msgdgst = MessageDigest::sha512();
+        //let msgdgst = MessageDigest::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        //let mut ak_verifier = Verifier::new(msgdgst, &pkey).unwrap();
+
+        //ak_verifier.update(signed).unwrap();
+        //assert!(ak_verifier.verify(&ak_sig).unwrap());
+    
+        Ok(())
+}
+
+fn ec() {
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let key = EcKey::generate(&group).unwrap();
+        let key = PKey::from_ec_key(key).unwrap();
+
+        let mut signer = Signer::new(MessageDigest::sha256(), &key).unwrap();
+        signer.update(b"hello world").unwrap();
+        let signature = signer.sign_to_vec().unwrap();
+
+        let mut verifier = Verifier::new(MessageDigest::sha256(), &key).unwrap();
+        verifier.update(b"hello world").unwrap();
+        assert!(verifier.verify(&signature).unwrap());
+
+        println!("success!");
+    }
 
 fn cast_u8_to_u16(num : u8 ) -> u16 { 
     num as u16
+}
+
+fn cast_u16_to_u8(num : u16) -> u8 {
+    num as u8
 }
 
 fn cast_u8vec_to_u16vec(vec : Vec<u8>) -> Vec<u16> {
@@ -168,6 +205,15 @@ fn cast_u8vec_to_u16vec(vec : Vec<u8>) -> Vec<u16> {
     }
     u16vec
 }
+
+fn cast_u16vec_to_u8vec(vec : Vec<u16>) -> Vec<u8> {
+    let mut u8vec = Vec::new();
+    for num in vec {
+        u8vec.push(cast_u16_to_u8(num));
+    }
+    u8vec
+}
+
 
 fn qheader_to_bytevec(header: &dcap_ql::quote::QuoteHeader) -> Vec<u16> {
     let mut vec = Vec::new();
@@ -182,14 +228,15 @@ fn qheader_to_bytevec(header: &dcap_ql::quote::QuoteHeader) -> Vec<u16> {
             vec.push(3 as u16);                                  // version == 2 bytes
             vec.push(attestation_key_type.to_u16().unwrap());    // AK key type == 2 bytes
             vec.push(0 as u16);                                  // reserved == 4 bytes
+            vec.push(0 as u16);
             vec.push(qe3_svn.clone());                           // QE SVN == 2 bytes
             vec.push(pce_svn.clone());                           // PCE SVN == 2 bytes
             
-            let mut qe_vid = (**qe3_vendor_id).to_owned();       // QE vendor ID == 16 bytes
+            let qe_vid = (**qe3_vendor_id).to_owned();       // QE vendor ID == 16 bytes
             let qe_id_u16 = cast_u8vec_to_u16vec(qe_vid);
             vec.extend(qe_id_u16);
             
-            let mut user_data = (**user_data).to_owned();        // user data == 20 bytes
+            let user_data = (**user_data).to_owned();        // user data == 20 bytes
             let user_data_u16 = cast_u8vec_to_u16vec(user_data); // (first 16 bytes are QE identifier)
             vec.extend(user_data_u16);
         }
@@ -206,7 +253,7 @@ fn main() -> std::result::Result<(), std::io::Error> {
             Ok(stream_client) => {
                 handle_client_init(stream_client);
 
-                let mut enclave_cnx = connect_to_enclave().unwrap();
+                let enclave_cnx = connect_to_enclave().unwrap();
                 send_qe_ti(&enclave_cnx);
 
                 let report = receive_report(enclave_cnx).unwrap();
@@ -230,28 +277,74 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
                 // parse quote sig
                 let q_enclave_report_sig = q_sig.signature();
-                let q_qe_report = q_sig.qe3_report();
-                let q_qe_report_sig = q_sig.qe3_signature();
+                let _q_qe_report = q_sig.qe3_report();
+                let _q_qe_report_sig = q_sig.qe3_signature();
                 let q_att_key_pub = q_sig.attestation_public_key();
-                let q_cert_data = q_sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
+                let _q_cert_data = q_sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
+
+                println!("ak sig: {:x?}", q_enclave_report_sig);
 
                 // TODO: let user choose root cert
 
                 // load certs
-                let pck_cert = load_cert("../pck_cert.pem");
-                let intermed_cert = load_cert("../pck_intermed_cert.pem");
-                let root_cert = load_cert("../pck_root_cert.pem");
+                //let pck_cert = load_cert("../pck_cert.pem");
+                //let intermed_cert = load_cert("../pck_intermed_cert.pem");
+                //let root_cert = load_cert("../pck_root_cert.pem");
                 println!("PCK cert chain loaded.");
                 
                 // verify PCK certificate chain
-                let _ = verify_chain_issuers(&root_cert, &intermed_cert, &pck_cert);
-                let _ = verify_chain_sigs(root_cert, intermed_cert, &pck_cert);
+                //let _ = verify_chain_issuers(&root_cert, &intermed_cert, &pck_cert);
+                //let _ = verify_chain_sigs(root_cert, intermed_cert, &pck_cert);
                 println!("PCK cert chain verified");
 
+                //key_from_affine_coordinates(
+                //    "30a0424cd21c2944838a2d75c92b37e76ea20d9f00893a3b4eee8a3c0aafec3e".to_string(),
+                //    "e04b65e92456d9888b52b379bdfbd51ee869ef1f0fc65b6659695b6cce081723".to_string()
+                //    );
+
+                let xcoord = q_att_key_pub[0..32].to_owned(); //byte array &[u8]
+                let ycoord = q_att_key_pub[32..64].to_owned();
+               
+
+                let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+                //let x = Vec::from_hex(xcoord)
+                //let x = Vec::from_hex("30a0424cd21c2944838a2d75c92b37e76ea20d9f00893a3b4eee8a3c0aafec3e")
+                //    .unwrap();
+                //let y = Vec::from_hex(ycoord)
+                //let y = Vec::from_hex("e04b65e92456d9888b52b379bdfbd51ee869ef1f0fc65b6659695b6cce081723")
+                //    .unwrap();
+
+                let xbn = openssl::bn::BigNum::from_slice(&xcoord).unwrap();
+                let ybn = openssl::bn::BigNum::from_slice(&ycoord).unwrap();
+
+                let ec_key = EcKey::from_public_key_affine_coordinates(&group, &xbn, &ybn).unwrap();
+                assert!(ec_key.check_key().is_ok());
+
+
+                ec();
+
+                //let x = std::str::from_utf8(&xcoord).expect("panic");
+                //let x = std::str::from_utf8(&v).expect("does panic");
+
+                //println!("xcoord: {:x?}", xcoord);
+                //println!("ycoord: {:x?}", ycoord);
+
+                //let x = Vec::from_hex("30a0424cd21c2944838a2d75c92b37e76ea20d9f00893a3b4eee8a3c0aafec3e");
+                //let x = Vec::from_hex(xcoord).expect("sflasjk");
+
+                //println!("x: {:?}", x);
+                //println!("y: {:?}", y);
+
+
+                //key_from_affine_coordinates(
+                //    xcoord,
+                //    ycoord
+                //    );
+
                 // verify AK's signature on Quote
-                let qvec = qheader_to_bytevec(q_header);
-                let signed_by_ak = qvec.extend(q_report_body);
-                verify_AK_to_quote(&q_att_key_pub, &signed_by_ak, &q_enclave_report_sig);
+                let mut signed_by_ak = cast_u16vec_to_u8vec(qheader_to_bytevec(q_header));
+                signed_by_ak.extend(q_report_body);
+                verify_ak_to_quote(&q_att_key_pub, &signed_by_ak, &q_enclave_report_sig);
                 
                 // verify PCK's signature on AKpub
                 // verify_PCK_to_AK();
