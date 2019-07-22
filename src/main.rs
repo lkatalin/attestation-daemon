@@ -70,11 +70,13 @@ fn return_quote_sig<'a>(quote: &'a dcap_ql::quote::Quote<'a>) ->
 }
 
 fn load_cert(file_path: &str) -> openssl::x509::X509 {
+
+    // TODO: more verbose error message
     let cert = fs::read_to_string(file_path)
-        .expect("Failed to load file");
+        .expect("Failed to read file");
     
     openssl::x509::X509::from_pem(cert.as_bytes()).ok()
-        .expect("Failed to load cert")
+        .expect("Failed to load cert from file: {}")
 }
 
 // TODO: process chain of arbitrary length
@@ -82,12 +84,11 @@ fn verify_chain_issuers(root_cert: &openssl::x509::X509,
                         intermed_cert: &openssl::x509::X509, 
                         pck_cert: &openssl::x509::X509) {
 
-    assert!(intermed_cert.issued(&pck_cert).as_raw() == 1, 
-        "Intermed cert did not issue leaf cert in PCK chain");
-    
-    assert!(root_cert.issued(&intermed_cert).as_raw() == 1,
-        "Root cert did not issue leaf cert in PCK chain");
+    // TODO: probably want to print an error if it fails
+    assert_eq!(intermed_cert.issued(&pck_cert), X509VerifyResult::OK);
 
+    assert_eq!(root_cert.issued(&intermed_cert), X509VerifyResult::OK);
+    
     println!("Issuer relationships in PCK cert chain are valid.");
 }
 
@@ -124,6 +125,8 @@ fn verify_chain_sigs(root_cert: openssl::x509::X509,
         .unwrap());
 
     //TODO: check root signature on itself
+    
+    println!("Signatures on certificate chain are valid.");
 }
 
 // TODO: set limit on number of intermediate certs
@@ -147,6 +150,7 @@ fn key_from_affine_coordinates(x : Vec<u8>, y : Vec<u8>) ->
 
         ec_key
 }
+
 
 fn raw_ecdsa_to_asn1(ecdsa_sig: &Vec<u8>) -> Vec<u8> {
     let r = &ecdsa_sig[0..32];
@@ -194,39 +198,44 @@ fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) ->
 
         //assert!(verifier.verify(&ak_sig).unwrap());
 
-        let mut sig = Vec::new();
-        sig.extend([30, 46, 2, 21, 0].iter().cloned());
-        sig.extend(&ak_sig);
-
         let asn1_ak_sig = raw_ecdsa_to_asn1(&ak_sig);
 
         match verifier.verify(&asn1_ak_sig) {
-            Ok(_) => {
-                println!("verification succeeded");
+            Ok(s) => {
+                println!("verification succeeded: {:?}", s);
             },
             Err(e) => {
                 println!("verification failed: {:?}", e);
             }
         }
 
+        //assert!(verifier.verify(&asn1_ak_sig).unwrap());
+
         Ok(())
 }
 
-fn ec() {
-        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
-        let key = EcKey::generate(&group).unwrap();
-        let key = PKey::from_ec_key(key).unwrap();
+fn verify_pck_to_ak(pck_cert: &openssl::x509::X509, qe_report_data_unhashed: &[u8], 
+    qe_report_sig: &[u8]) {
 
-        let mut signer = Signer::new(MessageDigest::sha256(), &key).unwrap();
-        signer.update(b"hello world").unwrap();
-        let signature = signer.sign_to_vec().unwrap();
- 
-        let mut verifier = Verifier::new(MessageDigest::sha256(), &key).unwrap();
-        verifier.update(b"hello world").unwrap();
-        assert!(verifier.verify(&signature).unwrap());
+        // verify signature
+        let pkey = pck_cert.public_key().unwrap();
 
-        println!("success!");
-    }
+        let mut verifier = Verifier::new(MessageDigest::sha256(), &pkey).unwrap();
+        verifier.update(qe_report_data_unhashed).unwrap();
+        
+        let reportsig = raw_ecdsa_to_asn1(&qe_report_sig.to_vec());
+
+        match verifier.verify(&reportsig) {
+            Ok(s) => {
+                println!("verification succeeded: {:?}", s); 
+            },
+            Err(e) => {
+                println!("verification failed: {:?}", e); 
+            }
+        }
+
+        // verify hash
+}
 
 fn cast_u8_to_u16(num : u8 ) -> u16 { 
     num as u16
@@ -305,61 +314,44 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 // parse main quote
                 let q_header = quote.header();
                 let q_report_body = quote.report_body();
-                let q_sig = return_quote_sig(&quote);
-
-                // parse quote header
-                // TODO
-
-                // parse quote report body
-                // TODO
+                let q_sig = return_quote_sig(&quote); // is there a method for this?
 
                 // parse quote sig
                 let q_enclave_report_sig = q_sig.signature();
-                let _q_qe_report = q_sig.qe3_report();
-                let _q_qe_report_sig = q_sig.qe3_signature();
+                let q_qe_report = q_sig.qe3_report();
+                let q_qe_report_sig = q_sig.qe3_signature();
                 let q_att_key_pub = q_sig.attestation_public_key();
-                let _q_cert_data = q_sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
+                let q_auth_data = q_sig.authentication_data();
+                //let _q_cert_data = q_sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
 
-                //println!("ak sig: {:x?}", q_enclave_report_sig);
-                println!("enclave report sig: {:x?}", q_enclave_report_sig);
-                println!("enclave report body: {:x?}", q_report_body);
 
                 // TODO: let user choose root cert
 
                 // load certs
-                //let pck_cert = load_cert("../pck_cert.pem");
-                //let intermed_cert = load_cert("../pck_intermed_cert.pem");
-                //let root_cert = load_cert("../pck_root_cert.pem");
+                let pck_cert = load_cert("pck_cert.pem");
+                let intermed_cert = load_cert("pck_intermed_cert.pem");
+                let root_cert = load_cert("pck_root_cert.pem");
                 println!("PCK cert chain loaded.");
                 
                 // verify PCK certificate chain
-                //let _ = verify_chain_issuers(&root_cert, &intermed_cert, &pck_cert);
-                //let _ = verify_chain_sigs(root_cert, intermed_cert, &pck_cert);
-                println!("PCK cert chain verified");
-
-                // test arbitrary ec key verification
-                ec();
-
-                println!("old ak sig: {:x?}", q_enclave_report_sig);
-                println!("ak sig length: {}", q_enclave_report_sig.len());
-                let ak_signature = Vec::from_hex("6e1cb8d97a9e9c665f5834b02d253b912004387187439c67e5e708b4d25566a4421e84ae7453db80cd7b4e92fa0cef1b68515887a0ed27d4a5fe0a081e5f8fe6").unwrap();
-                println!("new ak sig: {:x?}", ak_signature);
-                println!("ak sig length: {}", ak_signature.len());
-
-                let quoteheader = qheader_to_bytevec(q_header);
-                println!("quote header: {:x?}", quoteheader);
+                let _ = verify_chain_issuers(&root_cert, &intermed_cert, &pck_cert);
+                let _ = verify_chain_sigs(root_cert, intermed_cert, &pck_cert);
+                println!("PCK cert chain verified.");
                     
                 // verify AK's signature on Quote
-                let mut signed_by_ak = cast_u16vec_to_u8vec(qheader_to_bytevec(q_header));
-                signed_by_ak.extend(q_report_body);
-                //let ak_signature = q_enclave_report_sig.to_vec();
+                let q_header_bytevec = qheader_to_bytevec(q_header);
 
-                verify_ak_to_quote(&q_att_key_pub, &signed_by_ak, ak_signature);
+                // concatenate AK's signed material
+                let mut signed_by_ak = cast_u16vec_to_u8vec(q_header_bytevec);
+                signed_by_ak.extend(q_report_body.to_vec());
+                verify_ak_to_quote(&q_att_key_pub, &signed_by_ak, q_enclave_report_sig.to_vec());
                 
                 // verify PCK's signature on AKpub
-                // verify_PCK_to_AK();
-                //let _pck_pub_key = pck_cert.public_key();
-                //let pck_pub = EcKey::from_curve_name(Nid::SECP256K1).unwrap();                           
+                let mut qe_report_data = Vec::new();
+                qe_report_data.extend(q_att_key_pub.to_vec());
+                qe_report_data.extend(q_auth_data.to_vec());
+                qe_report_data.extend(vec![0 as u8; 32]);
+                //verify_pck_to_ak(&pck_cert, &qe_report_data, &q_qe_report_sig);
 
             },
             Err(e) => {
