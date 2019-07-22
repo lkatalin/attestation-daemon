@@ -148,6 +148,38 @@ fn key_from_affine_coordinates(x : Vec<u8>, y : Vec<u8>) ->
         ec_key
 }
 
+fn raw_ecdsa_to_asn1(ecdsa_sig: &Vec<u8>) -> Vec<u8> {
+    let r = &ecdsa_sig[0..32];
+    let s = &ecdsa_sig[32..64];
+
+    // add check for top bit of first byte to be zero;
+    // if not zero, add 0x00 padding
+
+    let mut vec = Vec::new();
+    vec.push(0x30); // beginning of ASN.1 encoding
+
+    let rpad = 0; // change if padding 
+    let spad = 0; // change if padding
+    let asn1_marker_len = 4; // 2 bytes for r, 2 bytes for s
+    let datalen = (32 * 2) + rpad + spad + asn1_marker_len;
+
+    let rvec = r.to_vec();
+    let svec = s.to_vec();
+
+    vec.push(datalen);
+    vec.push(0x02 as u8); // marks start of integer
+    vec.push(rvec.len() as u8); // integer length
+    vec.extend(rvec); // r value
+    vec.push(0x02 as u8); // marks start of integer
+    vec.push(svec.len() as u8); // integer length
+    vec.extend(svec); // s value
+
+    //println!("r: {:x?}, s: {:x?}", r, s);
+    //println!("\n\nvec: {:x?}", vec);
+
+    vec
+}
+
 fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) -> 
     std::result::Result<(), failure::Error> {
 
@@ -166,7 +198,9 @@ fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) ->
         sig.extend([30, 46, 2, 21, 0].iter().cloned());
         sig.extend(&ak_sig);
 
-        match verifier.verify(&sig) {
+        let asn1_ak_sig = raw_ecdsa_to_asn1(&ak_sig);
+
+        match verifier.verify(&asn1_ak_sig) {
             Ok(_) => {
                 println!("verification succeeded");
             },
