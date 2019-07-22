@@ -17,9 +17,7 @@ use openssl::pkey::PKey;
 use openssl::sign::Verifier;
 use openssl::ec::EcGroup;
 use openssl::hash::MessageDigest;
-use openssl::sign::*;
 use num_traits::cast::ToPrimitive;
-use hex::FromHex;
 
 
 fn handle_client_init(stream_client: TcpStream) {
@@ -205,9 +203,10 @@ fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) ->
                 println!("verification succeeded: {:?}", s);
             },
             Err(e) => {
-                println!("verification failed: {:?}", e);
+                println!("verification failed: {:?}", openssl::error::ErrorStack::get());
             }
         }
+
 
         //assert!(verifier.verify(&asn1_ak_sig).unwrap());
 
@@ -301,7 +300,7 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 handle_client_init(stream_client);
 
                 let enclave_cnx = connect_to_enclave().unwrap();
-                send_qe_ti(&enclave_cnx);
+                let _ = send_qe_ti(&enclave_cnx).expect("Could not send QE target info.");
 
                 let report = receive_report(enclave_cnx).unwrap();
 
@@ -344,7 +343,8 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 // concatenate AK's signed material
                 let mut signed_by_ak = cast_u16vec_to_u8vec(q_header_bytevec);
                 signed_by_ak.extend(q_report_body.to_vec());
-                verify_ak_to_quote(&q_att_key_pub, &signed_by_ak, q_enclave_report_sig.to_vec());
+                let _ = verify_ak_to_quote(&q_att_key_pub, &signed_by_ak, q_enclave_report_sig.to_vec())
+                    .expect("Verification of AK signature on Quote failed");
                 
                 // verify PCK's signature on AKpub
                 let mut qe_report_data = Vec::new();
