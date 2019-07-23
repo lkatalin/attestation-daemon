@@ -149,36 +149,54 @@ fn key_from_affine_coordinates(x : Vec<u8>, y : Vec<u8>) ->
         ec_key
 }
 
+// that the top bit of the first byte of each encoding must be zero
+fn check_top_bit(val: [u8; 32]) -> Vec<u8> {
+    let mut vec : Vec<u8> = Vec::new();
 
+    // if the top bit is not zero, pad the slice with a 0x00 byte
+    if 0b10000000 & &val[0] != 0 {
+        println!("top bit is not zero: {:x?}", val);
+        vec.push(0x00 as u8);
+        vec.extend(val.to_vec());
+    } else {
+        println!("top bit is zero: {:x?}", val);
+        vec.extend(val.to_vec());
+    }
+    vec
+}
+
+// note: the ecdsa input could also be a Vec<u8>
 fn raw_ecdsa_to_asn1(ecdsa_sig: &Vec<u8>) -> Vec<u8> {
-    let r = &ecdsa_sig[0..32];
-    let s = &ecdsa_sig[32..64];
+    let mut r_init: [u8; 32] = Default::default();
+    let mut s_init: [u8; 32] = Default::default();
+    r_init.copy_from_slice(&ecdsa_sig[0..32]);
+    s_init.copy_from_slice(&ecdsa_sig[32..64]);
 
-    // add check for top bit of first byte to be zero;
-    // if not zero, add 0x00 padding
+    let r = check_top_bit(r_init);
+    let s = check_top_bit(s_init);
+    println!("new r: {:x?}", r);
+    println!("new s: {:x?}", s);
+
+    let r_init_len = r_init.to_vec().len();
+    let s_init_len = s_init.to_vec().len();
+    let r_len = r.len();
+    let s_len = s.len();
 
     let mut vec = Vec::new();
     vec.push(0x30); // beginning of ASN.1 encoding
 
-    let rpad = 0; // change if padding 
-    let spad = 0; // change if padding
     let asn1_marker_len = 4; // 2 bytes for r, 2 bytes for s
-    let datalen = (32 * 2) + rpad + spad + asn1_marker_len;
+    let datalen = r_len + s_len + asn1_marker_len; 
 
-    let rvec = r.to_vec();
-    let svec = s.to_vec();
-
-    vec.push(datalen);
+    vec.push(datalen as u8); // remaining data length
     vec.push(0x02 as u8); // marks start of integer
-    vec.push(rvec.len() as u8); // integer length
-    vec.extend(rvec); // r value
+    vec.push(r_len as u8); // integer length
+    vec.extend(r); // r value
     vec.push(0x02 as u8); // marks start of integer
-    vec.push(svec.len() as u8); // integer length
-    vec.extend(svec); // s value
+    vec.push(s_len as u8); // integer length
+    vec.extend(s); // s value
 
-    //println!("r: {:x?}, s: {:x?}", r, s);
-    //println!("\n\nvec: {:x?}", vec);
-
+    println!("asn1 vec: {:x?}", vec);
     vec
 }
 
@@ -191,10 +209,8 @@ fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) ->
         let ec_key = key_from_affine_coordinates(xcoord, ycoord);
         let pkey = PKey::from_ec_key(ec_key).unwrap();
         
-        let mut verifier = Verifier::new(MessageDigest::sha256(), &pkey).unwrap();
+        let mut verifier = Verifier::new(MessageDigest::sha512(), &pkey).unwrap();
         verifier.update(signed).unwrap();
-
-        //assert!(verifier.verify(&ak_sig).unwrap());
 
         let asn1_ak_sig = raw_ecdsa_to_asn1(&ak_sig);
 
@@ -213,20 +229,20 @@ fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) ->
         Ok(())
 }
 
-fn verify_pck_to_ak(pck_cert: &openssl::x509::X509, qe_report_data_unhashed: &[u8], 
+fn verify_pck_to_ak(pck_cert: &openssl::x509::X509, qe_report_body: &[u8], 
     qe_report_sig: &[u8]) {
 
         // verify signature
         let pkey = pck_cert.public_key().unwrap();
 
         let mut verifier = Verifier::new(MessageDigest::sha256(), &pkey).unwrap();
-        verifier.update(qe_report_data_unhashed).unwrap();
+        verifier.update(qe_report_body).unwrap();
         
         let reportsig = raw_ecdsa_to_asn1(&qe_report_sig.to_vec());
 
         match verifier.verify(&reportsig) {
             Ok(s) => {
-                println!("verification succeeded: {:?}", s); 
+                println!("pck to ak verification succeeded: {:?}", s); 
             },
             Err(e) => {
                 println!("verification failed: {:?}", e); 
@@ -343,15 +359,15 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 // concatenate AK's signed material
                 let mut signed_by_ak = cast_u16vec_to_u8vec(q_header_bytevec);
                 signed_by_ak.extend(q_report_body.to_vec());
-                let _ = verify_ak_to_quote(&q_att_key_pub, &signed_by_ak, q_enclave_report_sig.to_vec())
-                    .expect("Verification of AK signature on Quote failed");
+                //let _ = verify_ak_to_quote(&q_att_key_pub, &signed_by_ak, q_enclave_report_sig.to_vec())
+                //    .expect("Verification of AK signature on Quote failed");
                 
                 // verify PCK's signature on AKpub
-                let mut qe_report_data = Vec::new();
-                qe_report_data.extend(q_att_key_pub.to_vec());
-                qe_report_data.extend(q_auth_data.to_vec());
-                qe_report_data.extend(vec![0 as u8; 32]);
-                //verify_pck_to_ak(&pck_cert, &qe_report_data, &q_qe_report_sig);
+                //let mut qe_report_data = Vec::new();
+                //qe_report_data.extend(q_att_key_pub.to_vec());
+                //qe_report_data.extend(q_auth_data.to_vec());
+                //qe_report_data.extend(vec![0 as u8; 32]);
+                verify_pck_to_ak(&pck_cert, &q_qe_report, &q_qe_report_sig);
 
             },
             Err(e) => {
