@@ -18,7 +18,7 @@ use openssl::sign::Verifier;
 use openssl::ec::EcGroup;
 use openssl::hash::MessageDigest;
 use num_traits::cast::ToPrimitive;
-
+use openssl::sha;
 
 fn handle_client_init(stream_client: TcpStream) {
     println!("New connection for daemon: {}", stream_client.peer_addr().unwrap());
@@ -209,9 +209,6 @@ fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) ->
 
         let asn1_ak_sig = raw_ecdsa_to_asn1(&ak_sig);
 
-        println!("asn1 sig: {:x?}", asn1_ak_sig);
-        println!("asn1 sig len: {}", asn1_ak_sig.len());
-
         match verifier.verify(&asn1_ak_sig) {
             Ok(s) => {
                 println!("AK to Quote verification succeeded: {:?}", s);
@@ -221,14 +218,13 @@ fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) ->
             }
         }
 
-
-        //assert!(verifier.verify(&asn1_ak_sig).unwrap());
+        assert!(verifier.verify(&asn1_ak_sig).unwrap());
 
         Ok(())
 }
 
 fn verify_pck_to_ak(pck_cert: &openssl::x509::X509, qe_report_body: &[u8], 
-    qe_report_sig: &[u8]) {
+    qe_report_sig: &[u8], ak_pub: &[u8], qe_auth_data: &[u8]) {
 
         // verify signature
         let pkey = pck_cert.public_key().unwrap();
@@ -240,7 +236,7 @@ fn verify_pck_to_ak(pck_cert: &openssl::x509::X509, qe_report_body: &[u8],
 
         match verifier.verify(&reportsig) {
             Ok(s) => {
-                println!("pck to ak verification succeeded: {:?}", s); 
+                println!("PCK to AK verification succeeded: {:?}", s); 
             },
             Err(e) => {
                 println!("PCK to AK verification failed: {:?}", e); 
@@ -248,6 +244,17 @@ fn verify_pck_to_ak(pck_cert: &openssl::x509::X509, qe_report_body: &[u8],
         }
 
         // verify hash
+        let hashed_reportdata = &qe_report_body[320..352];
+        let mut unhashed = Vec::new();
+        unhashed.extend(ak_pub.to_vec());
+        unhashed.extend(qe_auth_data.to_vec());
+
+        let mut hasher = sha::Sha256::new();
+        hasher.update(&unhashed);
+        let hash = hasher.finish();
+
+        assert_eq!(hash, hashed_reportdata);
+        println!("QE Report's hash of AK_pub||QEAuthData is valid.");
 }
 
 fn cast_u8_to_u16(num : u8 ) -> u16 { 
@@ -274,6 +281,7 @@ fn cast_u16vec_to_u8vec(vec : Vec<u16>) -> Vec<u8> {
     u8vec
 }
 
+// comment
 
 fn qheader_to_bytevec(header: &dcap_ql::quote::QuoteHeader) -> Vec<u8> {
     let mut vec = Vec::new();
@@ -367,36 +375,11 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 println!("PCK cert chain verified.");
                     
                 // verify AK's signature on Quote
-                //let q_header_bytevec = qheader_to_bytevec(q_header);
-
-                // concatenate AK's signed material
-                //let mut signed_by_ak = q_header_bytevec;
-                //let mut signed_by_ak = q_report_body.to_vec();
-                
-                //println!("report body: {:x?}", q_report_body);
-                //println!("report body len: {}", q_report_body.to_vec().len());
-
-                //println!("report CPU SVN: {:?}", &q_report_body[0..16]);
-                //println!("report MISCSELECT: {:?}", &q_report_body[16..20]);
-                //println!("report Reserved: {:?}", &q_report_body[20..48]);
-                //println!("report Attributes: {:?}", &q_report_body[48..64]);
-                //println!("report MRENCLAVE: {:?}", &q_report_body[64..96]);
-                //println!("report Reserved: {:?}", &q_report_body[96..128]);
-                //println!("report MRSIGNER: {:?}", &q_report_body[128..160]);
-                //println!("report Reserved: {:?}", &q_report_body[160..256]);
-                //println!("report ISVPRODID: {:?}", &q_report_body[256..258]);
-                //println!("report ISVSVN: {:?}", &q_report_body[258..260]);
-                //println!("report Reserved: {:?}", &q_report_body[260..320]);
-                //println!("report Report Data: {:?}", &q_report_body[320..384]);
-
-
-                //signed_by_ak.extend(q_report_body.to_vec());
-                //signed_by_ak.extend(q_header_bytevec);
                 let _ = verify_ak_to_quote(&q_att_key_pub, &ak_signed, q_enclave_report_sig.to_vec())
                     .expect("Verification of AK signature on Quote failed");
                 
                 // verify PCK's signature on AKpub
-                verify_pck_to_ak(&pck_cert, &q_qe_report, &q_qe_report_sig);
+                verify_pck_to_ak(&pck_cert, &q_qe_report, &q_qe_report_sig, &q_att_key_pub, &q_auth_data);
 
             },
             Err(e) => {
