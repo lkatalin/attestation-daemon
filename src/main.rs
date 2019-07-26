@@ -1,29 +1,23 @@
-#![allow(dead_code)]
-
 extern crate dcap_ql;
 
 use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
 use sgx_isa::{Report};
 use dcap_ql::quote::*;
-use std::fs;
-use std::str;
-use openssl::x509::*;
-use openssl::x509::store::X509StoreBuilder;
-use openssl::stack::Stack;
-use openssl::ec::EcKey;
-use openssl::nid::Nid;
-use openssl::pkey::PKey;
-use openssl::sign::Verifier;
-use openssl::ec::EcGroup;
-use openssl::hash::MessageDigest;
-use num_traits::cast::ToPrimitive;
-use openssl::sha;
+use std::{fs, str};
+use openssl::{ec::{EcKey, EcGroup}, 
+              x509::*,
+              nid::Nid,
+              stack::Stack,
+              pkey::PKey,
+              sign::Verifier,
+              hash::MessageDigest,
+              sha};
 
 fn handle_client_init(stream_client: TcpStream) {
-    println!("New connection for daemon: {}", stream_client.peer_addr().unwrap());
+    // TODO: add error handling
+    println!("New connection for daemon on: {}", stream_client.peer_addr().unwrap());
 }
-
 
 fn connect_to_enclave() -> Result<TcpStream> {
     let enclave_cnx = TcpStream::connect("localhost:1032")
@@ -32,7 +26,7 @@ fn connect_to_enclave() -> Result<TcpStream> {
     Ok(enclave_cnx)
 }
 
-fn send_qe_ti(mut cnx: &TcpStream) -> Result<()> {
+fn send_qe_targetinfo(mut cnx: &TcpStream) -> Result<()> {
     // retrieve QE target info
     let qe_ti = dcap_ql::target_info().unwrap();
  
@@ -100,7 +94,7 @@ fn verify_chain_sigs(root_cert: openssl::x509::X509,
     let mut context = X509StoreContext::new().unwrap();
     
     // add root to trusted store
-    let mut store_bldr = X509StoreBuilder::new().unwrap();
+    let mut store_bldr = store::X509StoreBuilder::new().unwrap();
     store_bldr.add_cert(root_cert).unwrap();
     let store = store_bldr.build();
     
@@ -149,7 +143,7 @@ fn key_from_affine_coordinates(x : Vec<u8>, y : Vec<u8>) ->
         ec_key
 }
 
-// that the top bit of the first byte of each encoding must be zero
+// for ASN.1 DER, the top bit of the first byte of each encoding (r, s) must be zero
 fn check_top_bit(val: [u8; 32]) -> Vec<u8> {
     let mut vec : Vec<u8> = Vec::new();
 
@@ -173,24 +167,20 @@ fn raw_ecdsa_to_asn1(ecdsa_sig: &Vec<u8>) -> Vec<u8> {
     let r = check_top_bit(r_init);
     let s = check_top_bit(s_init);
 
-    let r_init_len = r_init.to_vec().len();
-    let s_init_len = s_init.to_vec().len();
     let r_len = r.len();
     let s_len = s.len();
-
-    let mut vec = Vec::new();
-    vec.push(0x30); // beginning of ASN.1 encoding
-
-    let asn1_marker_len = 4; // 2 bytes for r, 2 bytes for s
+    let asn1_marker_len = 4; // 2 bytes for r, 2 for s
     let datalen = r_len + s_len + asn1_marker_len; 
 
-    vec.push(datalen as u8); // remaining data length
-    vec.push(0x02 as u8); // marks start of integer
-    vec.push(r_len as u8); // integer length
-    vec.extend(r); // r value
-    vec.push(0x02 as u8); // marks start of integer
-    vec.push(s_len as u8); // integer length
-    vec.extend(s); // s value
+    let mut vec = Vec::new();
+    vec.push(0x30);             // marks start of ASN.1 encoding
+    vec.push(datalen as u8);    // remaining data length
+    vec.push(0x02 as u8);       // marks start of integer
+    vec.push(r_len as u8);      // integer length
+    vec.extend(r);              // r value
+    vec.push(0x02 as u8);       // marks start of integer
+    vec.push(s_len as u8);      // integer length
+    vec.extend(s);              // s value
 
     vec
 }
@@ -214,7 +204,7 @@ fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) ->
                 println!("AK to Quote verification succeeded: {:?}", s);
             },
             Err(e) => {
-                println!("AK to Quote verification failed: {:?}", openssl::error::ErrorStack::get());
+                println!("AK to Quote verification failed: {:?}", e);
             }
         }
 
@@ -254,74 +244,9 @@ fn verify_pck_to_ak(pck_cert: &openssl::x509::X509, qe_report_body: &[u8],
         let hash = hasher.finish();
 
         assert_eq!(hash, hashed_reportdata);
-        println!("QE Report's hash of AK_pub||QEAuthData is valid.");
+        println!("QE Report's hash is valid (PCK signed AK).");
 }
-
-fn cast_u8_to_u16(num : u8 ) -> u16 { 
-    num as u16
-}
-
-fn cast_u16_to_u8(num : u16) -> u8 {
-    num as u8
-}
-
-fn cast_u8vec_to_u16vec(vec : Vec<u8>) -> Vec<u16> {
-    let mut u16vec = Vec::new();
-    for num in vec {
-        u16vec.push(cast_u8_to_u16(num));
-    }
-    u16vec
-}
-
-fn cast_u16vec_to_u8vec(vec : Vec<u16>) -> Vec<u8> {
-    let mut u8vec = Vec::new();
-    for num in vec {
-        u8vec.push(cast_u16_to_u8(num));
-    }
-    u8vec
-}
-
-// comment
-
-fn qheader_to_bytevec(header: &dcap_ql::quote::QuoteHeader) -> Vec<u8> {
-    let mut vec = Vec::new();
-    match header {
-        dcap_ql::quote::QuoteHeader::V3 {
-            attestation_key_type,
-            qe3_svn,
-            pce_svn,
-            qe3_vendor_id,
-            user_data,
-        } => {
-            vec.push(0 as u8);                                  // version (byte 0)
-            vec.push(3 as u8);                                  // version (byte 1)
-            vec.push(0 as u8);                                  // AK key type (byte 0)
-            vec.push(attestation_key_type.to_u8().unwrap());    // AK key type (byte 1)
-            vec.push(0 as u8);                                  // reserved == 4 bytes
-            vec.push(0 as u8);
-            vec.push(0 as u8);
-            vec.push(0 as u8);
-            let qesvn = qe3_svn.clone() as u8;
-            println!("qe svn = {}", qesvn);
-            vec.push(0 as u8);                                   // QE SVN (byte 0)
-            vec.push(qe3_svn.clone() as u8);                           // QE SVN (byte 1)
-            vec.push(0 as u8);                                   // PCE SVN (byte 0)
-            vec.push(pce_svn.clone() as u8);                           // PCE SVN == 2 bytes
-            
-            let qe_vid = (**qe3_vendor_id).to_owned();       // QE vendor ID == 16 bytes
-            //let qe_id_u16 = cast_u8vec_to_u16vec(qe_vid);
-            vec.extend(qe_vid);
-            
-            let user_data = (**user_data).to_owned();        // user data == 20 bytes
-            //let user_data_u16 = cast_u8vec_to_u16vec(user_data); // (first 16 bytes are QE identifier)
-            vec.extend(user_data);
-        }
-    }
-    println!("header vec: {:x?}", vec);
-    println!("header vec len: {}", vec.len());
-    vec
-}
-                
+ 
 fn main() -> std::result::Result<(), std::io::Error> {
     println!("Daemon listening for client request on port 1034... ");
 
@@ -332,24 +257,18 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 handle_client_init(stream_client);
 
                 let enclave_cnx = connect_to_enclave().unwrap();
-                let _ = send_qe_ti(&enclave_cnx).expect("Could not send QE target info.");
+                let _ = send_qe_targetinfo(&enclave_cnx).expect("Could not send QE target info.");
 
                 let report = receive_report(enclave_cnx).unwrap();
 
                 // get a quote from QE for the enclave's report
                 let quote = generate_quote(&report);
 
-                //println!("quote: {:x?}", quote);
-
                 // ISV enclave report signature's signed material == first 432 bytes of quote
                 let ak_signed = &quote[0..432].to_vec();
 
-                // get parseable quote
+                // make quote parseable and return quote signature
                 let quote = dcap_ql::quote::Quote::parse(&quote).unwrap();
-
-                // parse main quote
-                let q_header = quote.header();
-                let q_report_body = quote.report_body();
                 let q_sig = return_quote_sig(&quote); // is there a method for this?
 
                 // parse quote sig
@@ -358,8 +277,6 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 let q_qe_report_sig = q_sig.qe3_signature();
                 let q_att_key_pub = q_sig.attestation_public_key();
                 let q_auth_data = q_sig.authentication_data();
-                //let _q_cert_data = q_sig.certification_data::<Qe3CertDataPckCertificateChain>().unwrap();
-
 
                 // TODO: let user choose root cert
 
