@@ -4,7 +4,7 @@ use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
 use sgx_isa::{Report};
 use dcap_ql::quote::*;
-use std::{fs, str};
+use std::{fs, str, error::Error};
 use openssl::{ec::{EcKey, EcGroup}, 
               x509::*,
               nid::Nid,
@@ -15,44 +15,43 @@ use openssl::{ec::{EcKey, EcGroup},
               sha};
 
 fn handle_client_init(stream_client: TcpStream) {
-    // TODO: add error handling
-    println!("New connection for daemon on: {}", stream_client.peer_addr().unwrap());
+    let addr = stream_client.peer_addr()
+        .expect("Could not retrieve address of incoming connection.");
+    
+    println!("New connection for daemon from: {}", addr);
 }
 
 fn connect_to_enclave() -> Result<TcpStream> {
     let enclave_cnx = TcpStream::connect("localhost:1032")
-        .expect("Could not connect to enclave on 1032");
-
+        .expect("Could not connect to enclave on 1032.");
+    
     Ok(enclave_cnx)
 }
 
-fn send_qe_targetinfo(mut cnx: &TcpStream) -> Result<()> {
-    // retrieve QE target info
-    let qe_ti = dcap_ql::target_info().unwrap();
- 
-    // send target info to enclave
+fn send_qe_targetinfo(mut cnx: &TcpStream) {
+    let qe_ti = dcap_ql::target_info()
+        .expect("Could not retrieve QE target info.");
     cnx.write(&qe_ti.as_ref())
-        .expect("Could not send QE's target info to enclave on 1032");
-    
-    Ok(())
+        .expect("Could not send QE's target info to enclave on 1032.");
 }
 
 fn receive_report(mut cnx: TcpStream) -> Result<Report> {
     let mut encl_report = [0; sgx_isa::Report::UNPADDED_SIZE];
 
     cnx.read_exact(&mut encl_report)
-        .expect("Could not read report from enclave on 1032");
+        .expect("Could not read report from enclave on 1032.");
 
     let report = sgx_isa::Report::try_copy_from(&encl_report)
-        .expect("Could not create report from enclave data");
+        .expect("Could not create report from enclave data.");
 
     Ok(report)
 }
 
 fn generate_quote(report: &sgx_isa::Report) -> std::vec::Vec<u8> {
-    let quote = dcap_ql::quote(report).unwrap();
+    let quote = dcap_ql::quote(report)
+        .expect("Could not generate quote.");
 
-    println!("Quote successfully generated");
+    println!("\nQuote successfully generated...");
     quote
 }
 
@@ -65,10 +64,10 @@ fn load_cert(file_path: &str) -> openssl::x509::X509 {
 
     // TODO: more verbose error message
     let cert = fs::read_to_string(file_path)
-        .expect("Failed to read file");
+        .expect("Failed to read file.");
     
     openssl::x509::X509::from_pem(cert.as_bytes()).ok()
-        .expect("Failed to load cert from file: {}")
+        .expect("Failed to load cert from file.")
 }
 
 // TODO: process chain of arbitrary length
@@ -76,12 +75,12 @@ fn verify_chain_issuers(root_cert: &openssl::x509::X509,
                         intermed_cert: &openssl::x509::X509, 
                         pck_cert: &openssl::x509::X509) {
 
-    // TODO: probably want to print an error if it fails
+    // TODO: more verbose error message
     assert_eq!(intermed_cert.issued(&pck_cert), X509VerifyResult::OK);
 
     assert_eq!(root_cert.issued(&intermed_cert), X509VerifyResult::OK);
-    
-    println!("Issuer relationships in PCK cert chain are valid.");
+
+    println!("Issuer relationships in PCK cert chain are valid...");
 }
 
 // TODO: process chain of arbitrary length
@@ -95,7 +94,7 @@ fn verify_chain_sigs(root_cert: openssl::x509::X509,
     
     // add root to trusted store
     let mut store_bldr = store::X509StoreBuilder::new().unwrap();
-    store_bldr.add_cert(root_cert).unwrap();
+    store_bldr.add_cert(root_cert.clone()).unwrap();
     let store = store_bldr.build();
     
     // check that intermediate cert sig checks out in context with root cert
@@ -103,12 +102,7 @@ fn verify_chain_sigs(root_cert: openssl::x509::X509,
         .init(&store, &intermed_cert, &chain, |c| c.verify_cert())
         .unwrap());
 
-    // check that pck cert sig fails since intermed cert not yet added to context
-    assert!(!context
-        .init(&store, &pck_cert, &chain, |c| c.verify_cert())
-        .unwrap());
-
-    // add intermed to context chain
+    // add intermediate cert to chain
     let _ = chain.push(intermed_cert);
     
     // verify pck cert sig in context with intermed cert
@@ -116,16 +110,13 @@ fn verify_chain_sigs(root_cert: openssl::x509::X509,
         .init(&store, &pck_cert, &chain, |c| c.verify_cert())
         .unwrap());
 
-    //TODO: check root signature on itself
+    // check root signature on itself
+    assert!(context
+        .init(&store, &root_cert, &chain, |c| c.verify_cert())
+        .unwrap());
     
-    println!("Signatures on certificate chain are valid.");
+    println!("Signatures on certificate chain are valid...");
 }
-
-// TODO: set limit on number of intermediate certs
-// fn check_chain_length {
-//
-// }
-
 
 fn key_from_affine_coordinates(x : Vec<u8>, y : Vec<u8>) -> 
     openssl::ec::EcKey<openssl::pkey::Public> {
@@ -157,7 +148,6 @@ fn check_top_bit(val: [u8; 32]) -> Vec<u8> {
     vec
 }
 
-// note: the ecdsa input could also be a Vec<u8>
 fn raw_ecdsa_to_asn1(ecdsa_sig: &Vec<u8>) -> Vec<u8> {
     let mut r_init: [u8; 32] = Default::default();
     let mut s_init: [u8; 32] = Default::default();
@@ -185,8 +175,9 @@ fn raw_ecdsa_to_asn1(ecdsa_sig: &Vec<u8>) -> Vec<u8> {
     vec
 }
 
-fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) -> 
-    std::result::Result<(), failure::Error> {
+// verifies attestation key's signature on the quote header || report body
+fn verify_ak_sig(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) ->
+    std::result::Result<(), openssl::error::ErrorStack> {
 
         let xcoord = ak[0..32].to_owned();
         let ycoord = ak[32..64].to_owned();
@@ -201,22 +192,22 @@ fn verify_ak_to_quote(ak: &[u8], signed: &[u8], ak_sig: Vec<u8>) ->
 
         match verifier.verify(&asn1_ak_sig) {
             Ok(s) => {
-                println!("AK to Quote verification succeeded: {:?}", s);
+                println!("AK signature on Quote verification successful: {:?}...", s);
+                Ok(())
             },
             Err(e) => {
-                println!("AK to Quote verification failed: {:?}", e);
+                println!("AK signature on Quote encountered an error during 
+                         verification: {:?}.", e);
+                Err(e)
             }
         }
-
-        assert!(verifier.verify(&asn1_ak_sig).unwrap());
-
-        Ok(())
 }
 
-fn verify_pck_to_ak(pck_cert: &openssl::x509::X509, qe_report_body: &[u8], 
-    qe_report_sig: &[u8], ak_pub: &[u8], qe_auth_data: &[u8]) {
+// verifies pck's signature on attestation key (embedded in quote)
+fn verify_pck_sig(pck_cert: &openssl::x509::X509, qe_report_body: &[u8], 
+    qe_report_sig: &[u8]) -> std::result::Result<(), openssl::error::ErrorStack> {
 
-        // verify signature
+        // verify PCK's signature on QE Report Body
         let pkey = pck_cert.public_key().unwrap();
 
         let mut verifier = Verifier::new(MessageDigest::sha256(), &pkey).unwrap();
@@ -226,14 +217,22 @@ fn verify_pck_to_ak(pck_cert: &openssl::x509::X509, qe_report_body: &[u8],
 
         match verifier.verify(&reportsig) {
             Ok(s) => {
-                println!("PCK to AK verification succeeded: {:?}", s); 
+                println!("PCK signature on AK verification successful: {:?}...", s); 
+                Ok(())
             },
             Err(e) => {
-                println!("PCK to AK verification failed: {:?}", e); 
+                println!("PCK signature on AK encountered error during 
+                         verification: {:?}", e); 
+                Err(e)
             }
         }
+}
 
-        // verify hash
+// verifies the SHA-256 hash of AK_pub||QEAuthData (embedded in Quote, signed by PCK) 
+// is correct
+fn verify_pck_hash(qe_report_body: &[u8], ak_pub: &[u8], qe_auth_data: &[u8]) -> 
+    std::result::Result<(), Box<dyn Error>> {
+
         let hashed_reportdata = &qe_report_body[320..352];
         let mut unhashed = Vec::new();
         unhashed.extend(ak_pub.to_vec());
@@ -243,21 +242,26 @@ fn verify_pck_to_ak(pck_cert: &openssl::x509::X509, qe_report_body: &[u8],
         hasher.update(&unhashed);
         let hash = hasher.finish();
 
-        assert_eq!(hash, hashed_reportdata);
-        println!("QE Report's hash is valid (PCK signed AK).");
+        if hash == hashed_reportdata {
+            println!("QE Report's hash is valid....");
+            Ok(())
+        } else {
+            Err("QE Report's hash is invalid".into())
+        }
 }
  
 fn main() -> std::result::Result<(), std::io::Error> {
     println!("Daemon listening for client request on port 1034... ");
 
-    // listen for attestation request from client
+    // handle each incoming connection
     for stream_client in TcpListener::bind("localhost:1034").unwrap().incoming() {
         match stream_client {
             Ok(stream_client) => {
                 handle_client_init(stream_client);
 
                 let enclave_cnx = connect_to_enclave().unwrap();
-                let _ = send_qe_targetinfo(&enclave_cnx).expect("Could not send QE target info.");
+
+                send_qe_targetinfo(&enclave_cnx);
 
                 let report = receive_report(enclave_cnx).unwrap();
 
@@ -269,7 +273,7 @@ fn main() -> std::result::Result<(), std::io::Error> {
 
                 // make quote parseable and return quote signature
                 let quote = dcap_ql::quote::Quote::parse(&quote).unwrap();
-                let q_sig = return_quote_sig(&quote); // is there a method for this?
+                let q_sig = return_quote_sig(&quote);
 
                 // parse quote sig
                 let q_enclave_report_sig = q_sig.signature();
@@ -284,19 +288,19 @@ fn main() -> std::result::Result<(), std::io::Error> {
                 let pck_cert = load_cert("pck_cert.pem");
                 let intermed_cert = load_cert("pck_intermed_cert.pem");
                 let root_cert = load_cert("pck_root_cert.pem");
-                println!("PCK cert chain loaded.");
+                println!("PCK cert chain loaded...");
                 
                 // verify PCK certificate chain
                 let _ = verify_chain_issuers(&root_cert, &intermed_cert, &pck_cert);
                 let _ = verify_chain_sigs(root_cert, intermed_cert, &pck_cert);
-                println!("PCK cert chain verified.");
+                println!("PCK cert chain verified...");
                     
                 // verify AK's signature on Quote
-                let _ = verify_ak_to_quote(&q_att_key_pub, &ak_signed, q_enclave_report_sig.to_vec())
-                    .expect("Verification of AK signature on Quote failed");
+                let _ = verify_ak_sig(&q_att_key_pub, &ak_signed, q_enclave_report_sig.to_vec());
                 
                 // verify PCK's signature on AKpub
-                verify_pck_to_ak(&pck_cert, &q_qe_report, &q_qe_report_sig, &q_att_key_pub, &q_auth_data);
+                let _ = verify_pck_sig(&pck_cert, &q_qe_report, &q_qe_report_sig);
+                let _ = verify_pck_hash(&q_qe_report, &q_att_key_pub, &q_auth_data);
 
             },
             Err(e) => {
